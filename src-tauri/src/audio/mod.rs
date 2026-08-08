@@ -33,12 +33,12 @@ pub fn set_default(device_id: &str) -> Result<(), String> {
 
 #[cfg(not(target_os = "windows"))]
 pub fn list_devices() -> Result<Vec<AudioDevice>, String> {
-    Err("AudioSwitch requires Windows".to_string())
+    Err("Windows Audio Switcher requires Windows".to_string())
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn set_default(_device_id: &str) -> Result<(), String> {
-    Err("AudioSwitch requires Windows".to_string())
+    Err("Windows Audio Switcher requires Windows".to_string())
 }
 
 #[cfg(target_os = "windows")]
