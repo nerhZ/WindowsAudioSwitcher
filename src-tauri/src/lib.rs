@@ -21,10 +21,7 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
     let Ok(menu) = Menu::new(app) else {
         return;
     };
-    let Ok(separator_a) = PredefinedMenuItem::separator(app) else {
-        return;
-    };
-    let Ok(separator_b) = PredefinedMenuItem::separator(app) else {
+    let Ok(separator) = PredefinedMenuItem::separator(app) else {
         return;
     };
     let Ok(refresh) = MenuItem::with_id(app, MENU_REFRESH, "Refresh devices", true, None::<&str>)
@@ -35,12 +32,10 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
 
-    let _ = menu.append(&separator_a);
-
     let devices = audio::list_devices().unwrap_or_default();
     let devices: Vec<_> = devices
         .into_iter()
-        .filter(|d| d.state != audio::DeviceState::Disabled)
+        .filter(|d| d.state == audio::DeviceState::Active)
         .collect();
     if devices.is_empty() {
         if let Ok(placeholder) = MenuItem::with_id(
@@ -54,11 +49,7 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
         }
     } else {
         for device in &devices {
-            let label = if device.state == audio::DeviceState::Active {
-                device.name.clone()
-            } else {
-                format!("{} ({})", device.name, device.state.as_str())
-            };
+            let label = device.name.clone();
             let id = format!("{DEVICE_PREFIX}{}", device.id);
             if let Ok(item) =
                 CheckMenuItem::with_id(app, id, label, true, device.is_default(), None::<&str>)
@@ -68,7 +59,7 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
         }
     }
 
-    let _ = menu.append(&separator_b);
+    let _ = menu.append(&separator);
     let _ = menu.append(&refresh);
     let _ = menu.append(&quit);
 

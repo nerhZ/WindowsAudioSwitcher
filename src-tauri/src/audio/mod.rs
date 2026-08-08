@@ -42,18 +42,6 @@ pub enum DeviceState {
     Unknown,
 }
 
-impl DeviceState {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Unplugged => "unplugged",
-            Self::Disabled => "disabled",
-            Self::NotPresent => "not present",
-            Self::Unknown => "unknown",
-        }
-    }
-}
-
 #[cfg(target_os = "windows")]
 pub fn list_devices() -> Result<Vec<AudioDevice>, String> {
     windows_impl::list_devices()
