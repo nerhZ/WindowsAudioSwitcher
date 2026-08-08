@@ -5,59 +5,20 @@ use std::sync::Mutex;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Manager, Runtime,
 };
 
-const MENU_OPEN: &str = "open";
 const MENU_REFRESH: &str = "refresh";
 const MENU_QUIT: &str = "quit";
 const DEVICE_PREFIX: &str = "device::";
 const TRAY_ID: &str = "main";
-const MAIN_WINDOW: &str = "main";
 
 /// Serializes audio switches so interleaved `SetDefaultEndpoint` calls cannot
 /// leave the three roles pointing at different devices.
 struct AudioState(Mutex<()>);
 
-#[tauri::command]
-fn list_devices() -> Result<Vec<audio::AudioDevice>, String> {
-    audio::list_devices()
-}
-
-#[tauri::command]
-fn set_default(
-    state: tauri::State<'_, AudioState>,
-    device_id: String,
-    roles: Vec<audio::Role>,
-) -> Result<(), String> {
-    let _guard = state.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    audio::set_default(&device_id, &roles)
-}
-
-/// The dashboard window is created on demand and fully destroyed on close, so
-/// the WebView2 runtime only exists while the dashboard is open.
-fn open_dashboard<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-        return;
-    }
-    let result = WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::App("index.html".into()))
-        .title("AudioSwitch")
-        .inner_size(460.0, 620.0)
-        .build();
-    if let Err(err) = result {
-        eprintln!("failed to open dashboard window: {err}");
-    }
-}
-
 fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
     let Ok(menu) = Menu::new(app) else {
-        return;
-    };
-    let Ok(open) = MenuItem::with_id(app, MENU_OPEN, "Open AudioSwitch", true, None::<&str>)
-    else {
         return;
     };
     let Ok(separator_a) = PredefinedMenuItem::separator(app) else {
@@ -74,7 +35,6 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
 
-    let _ = menu.append(&open);
     let _ = menu.append(&separator_a);
 
     let devices = audio::list_devices().unwrap_or_default();
@@ -129,7 +89,6 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         return;
     }
     match id {
-        MENU_OPEN => open_dashboard(app),
         MENU_REFRESH => rebuild_tray_menu(app),
         MENU_QUIT => app.exit(0),
         _ => {}
@@ -161,14 +120,11 @@ pub fn run() {
             rebuild_tray_menu(app.app_handle());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_devices, set_default])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    // Default close destroys the dashboard window (freeing the WebView2
-    // runtime). That makes the event loop request an exit with no code;
-    // prevent it so the tray app keeps running. The Quit menu item exits
-    // with a code, which is allowed through.
+    // The app lives in the tray; the Quit menu item exits with a code, which
+    // is allowed through. Any uncoded exit request is prevented.
     app.run(|_, event| {
         if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
             if code.is_none() {

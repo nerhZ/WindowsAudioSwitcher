@@ -4,16 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.audioswitch.app",
   "build": {
-    "beforeDevCommand": "bun run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
-    "frontendDist": "../build"
+    "frontendDist": "../dist"
   },
   "app": {
-    "windows": [],
-    "security": {
-      "csp": null
-    }
+    "windows": []
   },
   "bundle": {
     "active": true,

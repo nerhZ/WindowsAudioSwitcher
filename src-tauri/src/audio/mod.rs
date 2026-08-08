@@ -4,11 +4,8 @@
 #[cfg(target_os = "windows")]
 mod policyconfig;
 
-use serde::{Deserialize, Serialize};
-
 /// The three Windows default-endpoint roles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Console,
     Multimedia,
@@ -19,7 +16,7 @@ pub enum Role {
 pub const ALL_ROLES: [Role; 3] = [Role::Console, Role::Multimedia, Role::Communications];
 
 /// One playback endpoint on the host.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct AudioDevice {
     pub id: String,
     pub name: String,
@@ -36,8 +33,7 @@ impl AudioDevice {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceState {
     Active,
     Unplugged,
