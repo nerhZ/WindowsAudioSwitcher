@@ -9,9 +9,21 @@
   "app": {
     "windows": []
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU3NkMzNkRBMERBMjBGMTkKUldRWkQ2SU4yalpzNXhHRXVjVG9od2tSZ1FkMmZweVYrVjBjY2FxaG80L0FqNEJlandra05SUisK",
+      "endpoints": [
+        "https://github.com/YOUR_ORG/YOUR_REPO/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

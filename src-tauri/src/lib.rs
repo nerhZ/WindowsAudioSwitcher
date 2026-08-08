@@ -7,6 +7,7 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager, Runtime,
 };
+use tauri_plugin_updater::UpdaterExt;
 
 const MENU_REFRESH: &str = "refresh";
 const MENU_QUIT: &str = "quit";
@@ -86,9 +87,36 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     }
 }
 
+/// Check for updates in the background shortly after launch. When one is
+/// found, it downloads and installs it, then exits so the new version takes
+/// over (the MSI installs in passive mode with no prompts).
+fn spawn_update_check(app: AppHandle) {
+    let Ok(updater) = app.updater() else {
+        eprintln!("AudioSwitch: updater is not configured");
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        match updater.check().await {
+            Ok(Some(update)) => {
+                eprintln!("AudioSwitch: update {} available; installing", update.version);
+                match update.download_and_install(|_, _| {}, || {}).await {
+                    Ok(_) => {
+                        eprintln!("AudioSwitch: update installed; exiting to apply");
+                        app.exit(0);
+                    }
+                    Err(err) => eprintln!("AudioSwitch: update install failed: {err}"),
+                }
+            }
+            Ok(None) => eprintln!("AudioSwitch: up to date"),
+            Err(err) => eprintln!("AudioSwitch: update check failed: {err}"),
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             app.manage(AudioState(Mutex::new(())));
 
@@ -109,6 +137,7 @@ pub fn run() {
             builder.build(app)?;
 
             rebuild_tray_menu(app.app_handle());
+            spawn_update_check(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())
