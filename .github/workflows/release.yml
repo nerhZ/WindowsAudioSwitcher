@@ -72,10 +72,12 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          # Tags containing a hyphen (v1.0.0-beta.1) are marked as GitHub
+          # Tags containing a hyphen (v1.0.0-1) are marked as GitHub
           # pre-releases; /releases/latest/ then keeps pointing at the latest
           # stable release, so pre-release manifests never reach stable
           # installs through the update endpoint.
+          # NOTE: MSI ProductVersion must be numeric, so pre-release tags need
+          # numeric ids (v1.1.0-1) - v1.1.0-beta.1 fails the bundler.
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             src-tauri/target/release/bundle/msi/*.msi

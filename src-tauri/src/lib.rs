@@ -47,8 +47,11 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
     } else {
         for device in &devices {
             let id = format!("{DEVICE_PREFIX}{}", device.id);
+            // '&' starts a menu mnemonic in Win32 menus; escape it so device
+            // names render literally.
+            let label = device.name.replace('&', "&&");
             if let Ok(item) =
-                CheckMenuItem::with_id(app, id, device.name.clone(), true, device.is_default(), None::<&str>)
+                CheckMenuItem::with_id(app, id, label, true, device.is_default(), None::<&str>)
             {
                 let _ = menu.append(&item);
             }
