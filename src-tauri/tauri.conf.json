@@ -10,14 +10,7 @@
     "frontendDist": "../build"
   },
   "app": {
-    "windows": [
-      {
-        "title": "AudioSwitch",
-        "width": 460,
-        "height": 620,
-        "visible": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, Runtime,
+    AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
 };
 
 const MENU_OPEN: &str = "open";
@@ -13,6 +13,7 @@ const MENU_REFRESH: &str = "refresh";
 const MENU_QUIT: &str = "quit";
 const DEVICE_PREFIX: &str = "device::";
 const TRAY_ID: &str = "main";
+const MAIN_WINDOW: &str = "main";
 
 /// Serializes audio switches so interleaved `SetDefaultEndpoint` calls cannot
 /// leave the three roles pointing at different devices.
@@ -33,11 +34,21 @@ fn set_default(
     audio::set_default(&device_id, &roles)
 }
 
-fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("main") {
+/// The dashboard window is created on demand and fully destroyed on close, so
+/// the WebView2 runtime only exists while the dashboard is open.
+fn open_dashboard<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        return;
+    }
+    let result = WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::App("index.html".into()))
+        .title("AudioSwitch")
+        .inner_size(460.0, 620.0)
+        .build();
+    if let Err(err) = result {
+        eprintln!("failed to open dashboard window: {err}");
     }
 }
 
@@ -118,7 +129,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         return;
     }
     match id {
-        MENU_OPEN => show_main_window(app),
+        MENU_OPEN => open_dashboard(app),
         MENU_REFRESH => rebuild_tray_menu(app),
         MENU_QUIT => app.exit(0),
         _ => {}
@@ -147,7 +158,7 @@ pub fn run() {
                         TrayIconEvent::DoubleClick {
                             button: MouseButton::Left,
                             ..
-                        } => show_main_window(tray.app_handle()),
+                        } => open_dashboard(tray.app_handle()),
                         _ => {}
                     }
                 });
@@ -160,11 +171,12 @@ pub fn run() {
             rebuild_tray_menu(app.app_handle());
             Ok(())
         })
-        // Closing the window keeps the tray app alive; quit via the tray menu.
+        // Closing the dashboard destroys it (freeing the WebView2 runtime);
+        // the tray app keeps running until Quit is chosen.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                let _ = window.destroy();
             }
         })
         .invoke_handler(tauri::generate_handler![list_devices, set_default])
