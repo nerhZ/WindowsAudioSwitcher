@@ -18,6 +18,7 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "nerhZ",
     "targets": ["msi"],
     "createUpdaterArtifacts": true,
     "icon": [
