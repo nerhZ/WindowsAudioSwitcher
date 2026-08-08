@@ -22,6 +22,7 @@ tauri-build = { version = "2", features = [] }
 # concrete Runtime implementation and Wry is the only production one. But no
 # window is ever created, so no WebView2 processes spawn at runtime.
 tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 # Required by tauri::generate_context!'s macro expansion (referenced from our
 # crate root), not used directly.

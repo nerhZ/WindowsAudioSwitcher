@@ -7,8 +7,10 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager, Runtime,
 };
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_updater::UpdaterExt;
 
+const MENU_AUTOSTART: &str = "autostart";
 const MENU_REFRESH: &str = "refresh";
 const MENU_QUIT: &str = "quit";
 const DEVICE_PREFIX: &str = "device::";
@@ -22,6 +24,12 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
     let Ok(menu) = Menu::new(app) else {
         return;
     };
+    let Ok(autostart) =
+        CheckMenuItem::with_id(app, MENU_AUTOSTART, "Start with Windows", true, false, None::<&str>)
+    else {
+        return;
+    };
+    let _ = autostart.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
     let Ok(separator) = PredefinedMenuItem::separator(app) else {
         return;
     };
@@ -32,6 +40,9 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
     let Ok(quit) = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>) else {
         return;
     };
+
+    let _ = menu.append(&autostart);
+    let _ = menu.append(&separator);
 
     let devices = audio::list_devices().unwrap_or_default();
     if devices.is_empty() {
@@ -77,6 +88,16 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         return;
     }
     match id {
+        MENU_AUTOSTART => {
+            let autolaunch = app.autolaunch();
+            let next = !autolaunch.is_enabled().unwrap_or(false);
+            if next {
+                let _ = autolaunch.enable();
+            } else {
+                let _ = autolaunch.disable();
+            }
+            rebuild_tray_menu(app);
+        }
         MENU_REFRESH => rebuild_tray_menu(app),
         MENU_QUIT => app.exit(0),
         _ => {}
@@ -112,6 +133,10 @@ fn spawn_update_check(app: AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             app.manage(AudioState(Mutex::new(())));
