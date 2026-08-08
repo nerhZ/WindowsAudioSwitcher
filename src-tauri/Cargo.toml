@@ -1,7 +1,7 @@
 [package]
 name = "tauri-app"
 version = "1.0.0"
-description = "AudioSwitch - switch every Windows audio default role from the tray"
+description = "Windows Audio Switcher - switch every Windows audio default role from the tray"
 authors = ["nerhZ"]
 edition = "2021"
 

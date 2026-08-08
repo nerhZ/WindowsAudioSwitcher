@@ -44,8 +44,8 @@ jobs:
           set -euo pipefail
           cd src-tauri/target/release/bundle/msi
           VERSION="${GITHUB_REF_NAME#v}"
-          MSI="AudioSwitch_${VERSION}_x64_en-US.msi"
-          SIG="AudioSwitch_${VERSION}_x64_en-US.msi.sig"
+          MSI="Windows Audio Switcher_${VERSION}_x64_en-US.msi"
+          SIG="Windows Audio Switcher_${VERSION}_x64_en-US.msi.sig"
           SIG_CONTENT=$(cat "$SIG")
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${MSI}"

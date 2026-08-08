@@ -85,23 +85,23 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
 /// over (the MSI installs in passive mode with no prompts).
 fn spawn_update_check(app: AppHandle) {
     let Ok(updater) = app.updater() else {
-        eprintln!("AudioSwitch: updater is not configured");
+        eprintln!("Windows Audio Switcher: updater is not configured");
         return;
     };
     tauri::async_runtime::spawn(async move {
         match updater.check().await {
             Ok(Some(update)) => {
-                eprintln!("AudioSwitch: update {} available; installing", update.version);
+                eprintln!("Windows Audio Switcher: update {} available; installing", update.version);
                 match update.download_and_install(|_, _| {}, || {}).await {
                     Ok(_) => {
-                        eprintln!("AudioSwitch: update installed; exiting to apply");
+                        eprintln!("Windows Audio Switcher: update installed; exiting to apply");
                         app.exit(0);
                     }
-                    Err(err) => eprintln!("AudioSwitch: update install failed: {err}"),
+                    Err(err) => eprintln!("Windows Audio Switcher: update install failed: {err}"),
                 }
             }
-            Ok(None) => eprintln!("AudioSwitch: up to date"),
-            Err(err) => eprintln!("AudioSwitch: update check failed: {err}"),
+            Ok(None) => eprintln!("Windows Audio Switcher: up to date"),
+            Err(err) => eprintln!("Windows Audio Switcher: update check failed: {err}"),
         }
     });
 }
@@ -115,7 +115,7 @@ pub fn run() {
 
             let mut builder = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().cloned().unwrap())
-                .tooltip("AudioSwitch")
+                .tooltip("Windows Audio Switcher")
                 .on_menu_event(handle_menu_event);
             // No on_tray_icon_event handler: the native menu opens on both
             // clicks (Windows default), and rebuilding the menu from tray

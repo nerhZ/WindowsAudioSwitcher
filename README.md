@@ -1,4 +1,4 @@
-# AudioSwitch
+# Windows Audio Switcher
 
 A Windows tray app that sets any audio device as the default for Console,
 Multimedia, and Communications all at once — so Discord, games, and the rest of
