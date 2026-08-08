@@ -10,3 +10,7 @@ from GitHub Releases.
 ## Why was it built?
 
 I frequently switch between wireless earbuds, headphones and speakers as my output device - and Windows' native audio switcher only switches the default device, not the default communication device. This leads to an issue where Discord doesn't switch, leading to changing the device on Windows, then navigating into Discord's settings and switching that as well. It can also cause problems for games that have voice chat capabilities, and is very annoying to constantly workaround.
+
+## Credits
+
+App icon by [Puckung](https://www.flaticon.com/authors/puckung) on Flaticon.
