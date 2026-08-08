@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listDevices, setDefault, type AudioDevice } from "$lib/audio";
+  import { listDevices, setDefault, type AudioDevice, type Role } from "$lib/audio";
+  import RoleBadge from "$lib/components/RoleBadge.svelte";
 
   let devices = $state<AudioDevice[]>([]);
   let error = $state<string | null>(null);
   let busy = $state<string | null>(null);
   let showInactive = $state(false);
+  let rolesOn = $state<Record<string, boolean>>({ console: true, media: true, comm: true });
 
   onMount(load);
 
@@ -22,7 +24,7 @@
     busy = id;
     error = null;
     try {
-      await setDefault(id);
+      await setDefault(id, selectedRoles);
       await load();
     } catch (e) {
       error = String(e);
@@ -31,16 +33,28 @@
     }
   }
 
+  const toggleRole = (key: string) => {
+    rolesOn[key] = !rolesOn[key];
+  };
+
+  const roleOptions = [
+    { key: "console", label: "Console" },
+    { key: "media", label: "Media" },
+    { key: "comm", label: "Comm" },
+  ];
+
+  const selectedRoles = $derived<Role[]>(
+    roleOptions.flatMap((r) =>
+      rolesOn[r.key]
+        ? [r.key === "console" ? "console" : r.key === "media" ? "multimedia" : "communications"]
+        : [],
+    ),
+  );
+
   const isDefault = (device: AudioDevice) =>
     device.is_default_console &&
     device.is_default_multimedia &&
     device.is_default_communications;
-
-  const roles = (device: AudioDevice) => [
-    { key: "Console", on: device.is_default_console },
-    { key: "Media", on: device.is_default_multimedia },
-    { key: "Comm", on: device.is_default_communications },
-  ];
 
   const visible = $derived(
     showInactive
@@ -77,6 +91,19 @@
     </button>
   </div>
 
+  <div class="flex flex-wrap items-center gap-1.5">
+    {#each roleOptions as role}
+      <RoleBadge
+        label={role.label}
+        on={rolesOn[role.key]}
+        onclick={() => toggleRole(role.key)}
+      />
+    {/each}
+    {#if selectedRoles.length === 0}
+      <span class="text-xs text-base-content/50">Select at least one role to switch.</span>
+    {/if}
+  </div>
+
   <div class="flex flex-1 flex-col gap-2.5">
     {#each visible as device (device.id)}
       <div
@@ -92,18 +119,11 @@
               <span class="badge badge-warning badge-sm capitalize">{device.state}</span>
             {/if}
           </div>
-          <div class="flex gap-1.5">
-            {#each roles(device) as role}
-              <span
-                class="badge badge-sm {role.on ? 'badge-primary' : 'badge-outline'}"
-              >{role.key}</span>
-            {/each}
-          </div>
         </div>
         <button
           class="btn btn-primary btn-sm"
           onclick={() => select(device.id)}
-          disabled={busy !== null}
+          disabled={busy !== null || selectedRoles.length === 0}
         >
           {#if busy === device.id}
             <span class="loading loading-spinner loading-xs"></span>

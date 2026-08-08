@@ -4,7 +4,19 @@
 #[cfg(target_os = "windows")]
 mod policyconfig;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+/// The three Windows default-endpoint roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    Console,
+    Multimedia,
+    Communications,
+}
+
+/// Every role, for callers that want the previous all-roles behaviour.
+pub const ALL_ROLES: [Role; 3] = [Role::Console, Role::Multimedia, Role::Communications];
 
 /// One playback endpoint on the host.
 #[derive(Debug, Clone, Serialize)]
@@ -52,8 +64,8 @@ pub fn list_devices() -> Result<Vec<AudioDevice>, String> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn set_default(device_id: &str) -> Result<(), String> {
-    windows_impl::set_default(device_id)
+pub fn set_default(device_id: &str, roles: &[Role]) -> Result<(), String> {
+    windows_impl::set_default(device_id, roles)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -62,7 +74,7 @@ pub fn list_devices() -> Result<Vec<AudioDevice>, String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn set_default(_device_id: &str) -> Result<(), String> {
+pub fn set_default(_device_id: &str, _roles: &[Role]) -> Result<(), String> {
     Err("AudioSwitch requires Windows".to_string())
 }
 
@@ -250,28 +262,34 @@ mod windows_impl {
         Ok(devices)
     }
 
-    /// Switch all three role defaults to `device_id`, then re-read them and
-    /// confirm they settled together — a split (partial failure, or a
-    /// concurrent switch) is reported as an error, never a silent success.
-    pub(super) fn set_default(device_id: &str) -> Result<(), String> {
+    /// Switch the requested role defaults to `device_id`, then re-read them
+    /// and confirm each settled — a split (partial failure, or a concurrent
+    /// switch) is reported as an error, never a silent success.
+    pub(super) fn set_default(device_id: &str, roles: &[super::Role]) -> Result<(), String> {
+        if roles.is_empty() {
+            return Err("no roles selected".to_string());
+        }
         let _com = ComGuard::new()?;
-        policyconfig::set_default_for_all_roles(device_id)
+        policyconfig::set_default_for_roles(device_id, roles)
             .map_err(|err| format!("IPolicyConfig::SetDefaultEndpoint: {err}"))?;
-        verify_all_roles(device_id)
+        verify_all_roles(device_id, roles)
     }
 
-    fn verify_all_roles(device_id: &str) -> Result<(), String> {
+    fn verify_all_roles(device_id: &str, roles: &[super::Role]) -> Result<(), String> {
         let enumerator = create_enumerator()?;
         let actual = current_defaults(&enumerator);
-        let settled = |role: &Option<String>| {
-            role.as_deref()
+        let settled = |role: &super::Role| {
+            let current = match role {
+                super::Role::Console => &actual.console,
+                super::Role::Multimedia => &actual.multimedia,
+                super::Role::Communications => &actual.communications,
+            };
+            current
+                .as_deref()
                 .map(|id| id.eq_ignore_ascii_case(device_id))
                 .unwrap_or(false)
         };
-        if settled(&actual.console)
-            && settled(&actual.multimedia)
-            && settled(&actual.communications)
-        {
+        if roles.iter().all(settled) {
             Ok(())
         } else {
             Err("default endpoint roles diverged after switching".to_string())
@@ -312,12 +330,42 @@ mod tests {
             .iter()
             .find(|d| d.is_default_multimedia)
             .expect("a multimedia default exists");
-        set_default(&current.id).expect("re-asserting the current default should succeed");
+        set_default(&current.id, &ALL_ROLES)
+            .expect("re-asserting the current default should succeed");
         let after = list_devices().unwrap();
         assert!(after
             .iter()
             .any(|d| d.id == current.id && d.is_default()),
             "device should still hold all three role defaults");
+    }
+
+    /// A single-role switch must only touch that role; the others stay put.
+    #[test]
+    fn subset_role_switch_is_idempotent() {
+        let devices = list_devices().unwrap();
+        let current = devices
+            .iter()
+            .find(|d| d.is_default_console)
+            .expect("a console default exists");
+        set_default(&current.id, &[Role::Console])
+            .expect("re-asserting a single role should succeed");
+        let after = list_devices().unwrap();
+        let now = after.iter().find(|d| d.id == current.id).expect("device still present");
+        assert!(now.is_default_console, "console role should stay on this device");
+        assert!(
+            now.is_default_multimedia && now.is_default_communications,
+            "untouched roles must not move"
+        );
+    }
+
+    #[test]
+    fn empty_role_list_is_rejected() {
+        let devices = list_devices().unwrap();
+        let id = devices[0].id.clone();
+        assert!(
+            set_default(&id, &[]).is_err(),
+            "switching with no roles selected must fail"
+        );
     }
 
     /// Regression: Tauri's main thread already lives in an STA (set up by the

@@ -16,10 +16,12 @@ export interface AudioDevice {
   is_default_communications: boolean;
 }
 
+export type Role = "console" | "multimedia" | "communications";
+
 export function listDevices(): Promise<AudioDevice[]> {
   return invoke<AudioDevice[]>("list_devices");
 }
 
-export function setDefault(deviceId: string): Promise<void> {
-  return invoke("set_default", { deviceId });
+export function setDefault(deviceId: string, roles: Role[]): Promise<void> {
+  return invoke("set_default", { deviceId, roles });
 }

@@ -3,7 +3,7 @@ mod audio;
 use std::sync::Mutex;
 
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Runtime,
 };
@@ -24,9 +24,13 @@ fn list_devices() -> Result<Vec<audio::AudioDevice>, String> {
 }
 
 #[tauri::command]
-fn set_default(state: tauri::State<'_, AudioState>, device_id: String) -> Result<(), String> {
+fn set_default(
+    state: tauri::State<'_, AudioState>,
+    device_id: String,
+    roles: Vec<audio::Role>,
+) -> Result<(), String> {
     let _guard = state.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    audio::set_default(&device_id)
+    audio::set_default(&device_id, &roles)
 }
 
 fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
@@ -48,9 +52,6 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
     let Ok(separator_a) = PredefinedMenuItem::separator(app) else {
         return;
     };
-    let Ok(devices_sub) = Submenu::with_id(app, "devices", "Devices", true) else {
-        return;
-    };
     let Ok(separator_b) = PredefinedMenuItem::separator(app) else {
         return;
     };
@@ -61,6 +62,9 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
     let Ok(quit) = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>) else {
         return;
     };
+
+    let _ = menu.append(&open);
+    let _ = menu.append(&separator_a);
 
     let devices = audio::list_devices().unwrap_or_default();
     let devices: Vec<_> = devices
@@ -75,7 +79,7 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
             false,
             None::<&str>,
         ) {
-            let _ = devices_sub.append(&placeholder);
+            let _ = menu.append(&placeholder);
         }
     } else {
         for device in &devices {
@@ -88,14 +92,11 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
             if let Ok(item) =
                 CheckMenuItem::with_id(app, id, label, true, device.is_default(), None::<&str>)
             {
-                let _ = devices_sub.append(&item);
+                let _ = menu.append(&item);
             }
         }
     }
 
-    let _ = menu.append(&open);
-    let _ = menu.append(&separator_a);
-    let _ = menu.append(&devices_sub);
     let _ = menu.append(&separator_b);
     let _ = menu.append(&refresh);
     let _ = menu.append(&quit);
@@ -111,7 +112,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         {
             let state = app.state::<AudioState>();
             let _guard = state.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let _ = audio::set_default(device_id);
+            let _ = audio::set_default(device_id, &audio::ALL_ROLES);
         }
         rebuild_tray_menu(app);
         return;
