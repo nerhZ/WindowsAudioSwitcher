@@ -103,19 +103,11 @@ impl Drop for PolicyConfig {
     }
 }
 
-/// Set the device as the default for the requested roles.
-pub(super) fn set_default_for_roles(
-    device_id: &str,
-    roles: &[super::Role],
-) -> windows::core::Result<()> {
+/// Set the device as the default for Console, Multimedia and Communications.
+pub(super) fn set_default_for_all_roles(device_id: &str) -> windows::core::Result<()> {
     let config = PolicyConfig::create()?;
-    for role in roles {
-        let erole = match role {
-            super::Role::Console => eConsole,
-            super::Role::Multimedia => eMultimedia,
-            super::Role::Communications => eCommunications,
-        };
-        config.set_default_endpoint(device_id, erole)?;
+    for role in [eConsole, eMultimedia, eCommunications] {
+        config.set_default_endpoint(device_id, role)?;
     }
     Ok(())
 }

@@ -2,7 +2,7 @@
 name = "tauri-app"
 version = "1.0.0"
 description = "AudioSwitch - switch every Windows audio default role from the tray"
-authors = ["you"]
+authors = ["nerhZ"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -12,17 +12,19 @@ edition = "2021"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "tauri_app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# Note: the wry (webview) feature can't be dropped — Tauri's App needs a
+# Note: the wry (webview) feature can't be dropped - Tauri's App needs a
 # concrete Runtime implementation and Wry is the only production one. But no
 # window is ever created, so no WebView2 processes spawn at runtime.
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-updater = "2"
+# Required by tauri::generate_context!'s macro expansion (referenced from our
+# crate root), not used directly.
 serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
@@ -33,7 +35,6 @@ windows = { version = "0.58", features = [
   "Win32_System_Variant",
   "Win32_Media_Audio",
   "Win32_Media_Audio_Endpoints",
-  "Win32_System_Registry",
   "Win32_UI_Shell_PropertiesSystem",
   "Win32_Devices_FunctionDiscovery",
   "Win32_Devices_Properties",

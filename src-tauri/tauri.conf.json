@@ -5,9 +5,6 @@
   "build": {
     "frontendDist": "../dist"
   },
-  "app": {
-    "windows": []
-  },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU3NkMzNkRBMERBMjBGMTkKUldRWkQ2SU4yalpzNXhHRXVjVG9od2tSZ1FkMmZweVYrVjBjY2FxaG80L0FqNEJlandra05SUisK",
@@ -21,13 +18,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi"],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.icns",
       "icons/icon.ico"
     ]
   }

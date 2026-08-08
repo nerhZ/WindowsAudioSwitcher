@@ -34,10 +34,6 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
     };
 
     let devices = audio::list_devices().unwrap_or_default();
-    let devices: Vec<_> = devices
-        .into_iter()
-        .filter(|d| d.state == audio::DeviceState::Active)
-        .collect();
     if devices.is_empty() {
         if let Ok(placeholder) = MenuItem::with_id(
             app,
@@ -50,10 +46,9 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
         }
     } else {
         for device in &devices {
-            let label = device.name.clone();
             let id = format!("{DEVICE_PREFIX}{}", device.id);
             if let Ok(item) =
-                CheckMenuItem::with_id(app, id, label, true, device.is_default(), None::<&str>)
+                CheckMenuItem::with_id(app, id, device.name.clone(), true, device.is_default(), None::<&str>)
             {
                 let _ = menu.append(&item);
             }
@@ -72,11 +67,9 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let id = event.id().as_ref();
     if let Some(device_id) = id.strip_prefix(DEVICE_PREFIX) {
-        {
-            let state = app.state::<AudioState>();
-            let _guard = state.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let _ = audio::set_default(device_id, &audio::ALL_ROLES);
-        }
+        let state = app.state::<AudioState>();
+        let _guard = state.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _ = audio::set_default(device_id);
         rebuild_tray_menu(app);
         return;
     }

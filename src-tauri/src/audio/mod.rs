@@ -4,23 +4,11 @@
 #[cfg(target_os = "windows")]
 mod policyconfig;
 
-/// The three Windows default-endpoint roles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    Console,
-    Multimedia,
-    Communications,
-}
-
-/// Every role, for callers that want the previous all-roles behaviour.
-pub const ALL_ROLES: [Role; 3] = [Role::Console, Role::Multimedia, Role::Communications];
-
 /// One playback endpoint on the host.
 #[derive(Debug, Clone)]
 pub struct AudioDevice {
     pub id: String,
     pub name: String,
-    pub state: DeviceState,
     pub is_default_console: bool,
     pub is_default_multimedia: bool,
     pub is_default_communications: bool,
@@ -33,23 +21,14 @@ impl AudioDevice {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceState {
-    Active,
-    Unplugged,
-    Disabled,
-    NotPresent,
-    Unknown,
-}
-
 #[cfg(target_os = "windows")]
 pub fn list_devices() -> Result<Vec<AudioDevice>, String> {
     windows_impl::list_devices()
 }
 
 #[cfg(target_os = "windows")]
-pub fn set_default(device_id: &str, roles: &[Role]) -> Result<(), String> {
-    windows_impl::set_default(device_id, roles)
+pub fn set_default(device_id: &str) -> Result<(), String> {
+    windows_impl::set_default(device_id)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -58,20 +37,19 @@ pub fn list_devices() -> Result<Vec<AudioDevice>, String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn set_default(_device_id: &str, _roles: &[Role]) -> Result<(), String> {
+pub fn set_default(_device_id: &str) -> Result<(), String> {
     Err("AudioSwitch requires Windows".to_string())
 }
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::{DeviceState, policyconfig};
+    use super::policyconfig;
     use std::ffi::c_void;
     use windows::core::{Error as WinError, PWSTR};
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
     use windows::Win32::Media::Audio::{
         eCommunications, eConsole, eMultimedia, eRender, ERole, IMMDevice,
-        IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE, DEVICE_STATE_ACTIVE,
-        DEVICE_STATE_DISABLED, DEVICE_STATE_NOTPRESENT, DEVICE_STATE_UNPLUGGED,
+        IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
@@ -82,10 +60,10 @@ mod windows_impl {
     /// per-thread, so nested creation is safe — but only the call that
     /// actually initialized the apartment may uninitialize it.
     ///
-    /// Tauri runs commands on the main thread, where the WebView2 message
-    /// loop already initialized COM as STA; a fresh MTA init then fails with
-    /// RPC_E_CHANGED_MODE. The existing apartment is still fully usable for
-    /// Core Audio, so we reuse it instead of failing.
+    /// The main thread may already live in an apartment set up by Tauri or
+    /// WebView2, in which case an MTA init fails with RPC_E_CHANGED_MODE.
+    /// The existing apartment is still fully usable for Core Audio, so we
+    /// reuse it instead of failing.
     pub(super) struct ComGuard {
         pub(super) owns_init: bool,
     }
@@ -169,20 +147,6 @@ mod windows_impl {
         Ok(value.to_string())
     }
 
-    fn state_from_raw(raw: DEVICE_STATE) -> DeviceState {
-        if raw == DEVICE_STATE_ACTIVE {
-            DeviceState::Active
-        } else if raw == DEVICE_STATE_UNPLUGGED {
-            DeviceState::Unplugged
-        } else if raw == DEVICE_STATE_DISABLED {
-            DeviceState::Disabled
-        } else if raw == DEVICE_STATE_NOTPRESENT {
-            DeviceState::NotPresent
-        } else {
-            DeviceState::Unknown
-        }
-    }
-
     #[derive(Default)]
     struct RoleDefaults {
         console: Option<String>,
@@ -203,16 +167,13 @@ mod windows_impl {
         }
     }
 
-    /// Enumerate render endpoints (active, unplugged and disabled) and mark
-    /// which one currently holds each role default.
+    /// Enumerate active render endpoints and mark which one currently holds
+    /// each role default.
     pub(super) fn list_devices() -> Result<Vec<super::AudioDevice>, String> {
         let _com = ComGuard::new()?;
         let enumerator = create_enumerator()?;
 
-        let mask = DEVICE_STATE(
-            DEVICE_STATE_ACTIVE.0 | DEVICE_STATE_UNPLUGGED.0 | DEVICE_STATE_DISABLED.0,
-        );
-        let collection = unsafe { enumerator.EnumAudioEndpoints(eRender, mask) }
+        let collection = unsafe { enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) }
             .map_err(|err| format!("EnumAudioEndpoints: {err}"))?;
         let count =
             unsafe { collection.GetCount() }.map_err(|err| format!("GetCount: {err}"))?;
@@ -225,9 +186,6 @@ mod windows_impl {
                 .map_err(|err| format!("IMMDeviceCollection::Item({index}): {err}"))?;
             let id = device_id(&device)?;
             let name = friendly_name(&device).unwrap_or_else(|_| "(unnamed device)".to_string());
-            let state = state_from_raw(
-                unsafe { device.GetState() }.map_err(|err| format!("IMMDevice::GetState: {err}"))?,
-            );
             let is_role_default = |current: &Option<String>| {
                 current
                     .as_deref()
@@ -240,40 +198,34 @@ mod windows_impl {
                 is_default_communications: is_role_default(&defaults.communications),
                 id,
                 name,
-                state,
             });
         }
         Ok(devices)
     }
 
-    /// Switch the requested role defaults to `device_id`, then re-read them
-    /// and confirm each settled — a split (partial failure, or a concurrent
+    /// Switch all three role defaults to `device_id`, then re-read them and
+    /// confirm each settled — a split (partial failure, or a concurrent
     /// switch) is reported as an error, never a silent success.
-    pub(super) fn set_default(device_id: &str, roles: &[super::Role]) -> Result<(), String> {
-        if roles.is_empty() {
-            return Err("no roles selected".to_string());
-        }
+    pub(super) fn set_default(device_id: &str) -> Result<(), String> {
         let _com = ComGuard::new()?;
-        policyconfig::set_default_for_roles(device_id, roles)
+        policyconfig::set_default_for_all_roles(device_id)
             .map_err(|err| format!("IPolicyConfig::SetDefaultEndpoint: {err}"))?;
-        verify_all_roles(device_id, roles)
+        verify_all_roles(device_id)
     }
 
-    fn verify_all_roles(device_id: &str, roles: &[super::Role]) -> Result<(), String> {
+    fn verify_all_roles(device_id: &str) -> Result<(), String> {
         let enumerator = create_enumerator()?;
         let actual = current_defaults(&enumerator);
-        let settled = |role: &super::Role| {
-            let current = match role {
-                super::Role::Console => &actual.console,
-                super::Role::Multimedia => &actual.multimedia,
-                super::Role::Communications => &actual.communications,
-            };
+        let settled = |current: &Option<String>| {
             current
                 .as_deref()
                 .map(|id| id.eq_ignore_ascii_case(device_id))
                 .unwrap_or(false)
         };
-        if roles.iter().all(settled) {
+        if settled(&actual.console)
+            && settled(&actual.multimedia)
+            && settled(&actual.communications)
+        {
             Ok(())
         } else {
             Err("default endpoint roles diverged after switching".to_string())
@@ -288,7 +240,7 @@ mod tests {
     use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
     #[test]
-    fn enumerates_render_endpoints() {
+    fn enumerates_active_render_endpoints() {
         let devices = list_devices().expect("should enumerate endpoints");
         assert!(!devices.is_empty(), "expected at least one playback device");
         assert!(devices.iter().any(|d| !d.name.is_empty()), "names should be readable");
@@ -314,8 +266,7 @@ mod tests {
             .iter()
             .find(|d| d.is_default_multimedia)
             .expect("a multimedia default exists");
-        set_default(&current.id, &ALL_ROLES)
-            .expect("re-asserting the current default should succeed");
+        set_default(&current.id).expect("re-asserting the current default should succeed");
         let after = list_devices().unwrap();
         assert!(after
             .iter()
@@ -323,39 +274,9 @@ mod tests {
             "device should still hold all three role defaults");
     }
 
-    /// A single-role switch must only touch that role; the others stay put.
-    #[test]
-    fn subset_role_switch_is_idempotent() {
-        let devices = list_devices().unwrap();
-        let current = devices
-            .iter()
-            .find(|d| d.is_default_console)
-            .expect("a console default exists");
-        set_default(&current.id, &[Role::Console])
-            .expect("re-asserting a single role should succeed");
-        let after = list_devices().unwrap();
-        let now = after.iter().find(|d| d.id == current.id).expect("device still present");
-        assert!(now.is_default_console, "console role should stay on this device");
-        assert!(
-            now.is_default_multimedia && now.is_default_communications,
-            "untouched roles must not move"
-        );
-    }
-
-    #[test]
-    fn empty_role_list_is_rejected() {
-        let devices = list_devices().unwrap();
-        let id = devices[0].id.clone();
-        assert!(
-            set_default(&id, &[]).is_err(),
-            "switching with no roles selected must fail"
-        );
-    }
-
-    /// Regression: Tauri's main thread already lives in an STA (set up by the
-    /// WebView2 message loop), so an MTA init fails with RPC_E_CHANGED_MODE.
-    /// The guard must reuse the existing apartment rather than fail — this
-    /// reproduces the exact failure seen in the dashboard.
+    /// Regression: the main thread may already live in an STA (set up by Tauri
+    /// or WebView2), so an MTA init fails with RPC_E_CHANGED_MODE. The guard
+    /// must reuse the existing apartment rather than fail.
     #[test]
     fn com_guard_reuses_existing_apartment() {
         let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
