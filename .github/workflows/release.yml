@@ -44,13 +44,16 @@ jobs:
           set -euo pipefail
           cd src-tauri/target/release/bundle/msi
           VERSION="${GITHUB_REF_NAME#v}"
-          MSI="Windows Audio Switcher_${VERSION}_x64_en-US.msi"
-          SIG="Windows Audio Switcher_${VERSION}_x64_en-US.msi.sig"
+          # GitHub sanitizes spaces in uploaded asset names (spaces -> dots),
+          # so release assets must be space-free or every manifest URL 404s.
+          # Rename the built artifacts before writing the manifest.
+          mv "Windows Audio Switcher_${VERSION}_x64_en-US.msi" "Windows-Audio-Switcher_${VERSION}_x64_en-US.msi"
+          mv "Windows Audio Switcher_${VERSION}_x64_en-US.msi.sig" "Windows-Audio-Switcher_${VERSION}_x64_en-US.msi.sig"
+          MSI="Windows-Audio-Switcher_${VERSION}_x64_en-US.msi"
+          SIG="Windows-Audio-Switcher_${VERSION}_x64_en-US.msi.sig"
           SIG_CONTENT=$(cat "$SIG")
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          # Spaces in the artifact name must be percent-encoded in the URL
-          # (reqwest/GitHub reject raw spaces in request URIs).
-          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${MSI// /%20}"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${MSI}"
           cat > latest.json <<EOF
           {
             "version": "${VERSION}",

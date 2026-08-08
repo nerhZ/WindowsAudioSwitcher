@@ -90,11 +90,18 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     match id {
         MENU_AUTOSTART => {
             let autolaunch = app.autolaunch();
-            let next = !autolaunch.is_enabled().unwrap_or(false);
-            if next {
-                let _ = autolaunch.enable();
+            let enabled = autolaunch.is_enabled().unwrap_or(false);
+            let result = if enabled {
+                autolaunch.disable()
             } else {
-                let _ = autolaunch.disable();
+                autolaunch.enable()
+            };
+            match result {
+                Ok(_) => log_line(&format!("autostart: {}", if enabled { "disabled" } else { "enabled" })),
+                Err(err) => log_line(&format!(
+                    "autostart: {} failed: {err}",
+                    if enabled { "disable" } else { "enable" }
+                )),
             }
             rebuild_tray_menu(app);
         }
@@ -104,28 +111,63 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     }
 }
 
+/// Append a timestamped line to the update log in the app data directory.
+/// Release builds have no console, so this is the only way to see what the
+/// updater and autostart are doing.
+fn log_line(message: &str) {
+    let Ok(dir) = std::env::var("LOCALAPPDATA") else {
+        return;
+    };
+    let dir = std::path::Path::new(&dir).join("com.audioswitch.app");
+    let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join("app.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&file) {
+        use std::io::Write;
+        let _ = writeln!(f, "{} {message}", chrono_now());
+    }
+}
+
+/// Best-effort local timestamp via GetLocalTime (no extra dependencies).
+fn chrono_now() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::SYSTEMTIME;
+        use windows::Win32::System::SystemInformation::GetLocalTime;
+        let st: SYSTEMTIME = unsafe { GetLocalTime() };
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
+        )
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "????-??-?? ??:??:??".to_string()
+    }
+}
+
 /// Check for updates in the background shortly after launch. When one is
 /// found, it downloads and installs it, then exits so the new version takes
 /// over (the MSI installs in passive mode with no prompts).
 fn spawn_update_check(app: AppHandle) {
     let Ok(updater) = app.updater() else {
-        eprintln!("Windows Audio Switcher: updater is not configured");
+        log_line("update: updater is not configured");
         return;
     };
+    log_line("update: checking for updates");
     tauri::async_runtime::spawn(async move {
         match updater.check().await {
             Ok(Some(update)) => {
-                eprintln!("Windows Audio Switcher: update {} available; installing", update.version);
+                log_line(&format!("update: {} available; installing", update.version));
                 match update.download_and_install(|_, _| {}, || {}).await {
                     Ok(_) => {
-                        eprintln!("Windows Audio Switcher: update installed; exiting to apply");
+                        log_line("update: installed; exiting to apply");
                         app.exit(0);
                     }
-                    Err(err) => eprintln!("Windows Audio Switcher: update install failed: {err}"),
+                    Err(err) => log_line(&format!("update: install failed: {err}")),
                 }
             }
-            Ok(None) => eprintln!("Windows Audio Switcher: up to date"),
-            Err(err) => eprintln!("Windows Audio Switcher: update check failed: {err}"),
+            Ok(None) => log_line("update: up to date"),
+            Err(err) => log_line(&format!("update: check failed: {err}")),
         }
     });
 }
