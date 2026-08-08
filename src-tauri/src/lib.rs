@@ -138,28 +138,29 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .setup(|app| {
             app.manage(AudioState(Mutex::new(())));
 
             let mut builder = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().cloned().unwrap())
                 .tooltip("AudioSwitch")
+                // Menu on right click only — a left click opens the dashboard.
+                .show_menu_on_left_click(false)
                 .on_menu_event(handle_menu_event)
                 .on_tray_icon_event(|tray, event| {
-                    match event {
-                        // Rebuild the menu on every click so the device list is
-                        // fresh when the menu is shown.
-                        TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            button_state: MouseButtonState::Up,
-                            ..
-                        } => rebuild_tray_menu(tray.app_handle()),
-                        TrayIconEvent::DoubleClick {
-                            button: MouseButton::Left,
-                            ..
-                        } => open_dashboard(tray.app_handle()),
-                        _ => {}
+                    // Never rebuild the menu from tray icon events: replacing
+                    // the HMENU while Windows is about to track the popup makes
+                    // it flash open and close. The menu is built at startup and
+                    // refreshed only from menu events (Refresh devices, device
+                    // switches) — moments when no popup is being displayed.
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        open_dashboard(tray.app_handle());
                     }
                 });
 
@@ -171,15 +172,19 @@ pub fn run() {
             rebuild_tray_menu(app.app_handle());
             Ok(())
         })
-        // Closing the dashboard destroys it (freeing the WebView2 runtime);
-        // the tray app keeps running until Quit is chosen.
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.destroy();
-            }
-        })
         .invoke_handler(tauri::generate_handler![list_devices, set_default])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Default close destroys the dashboard window (freeing the WebView2
+    // runtime). That makes the event loop request an exit with no code;
+    // prevent it so the tray app keeps running. The Quit menu item exits
+    // with a code, which is allowed through.
+    app.run(|_, event| {
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            if code.is_none() {
+                api.prevent_exit();
+            }
+        }
+    });
 }
