@@ -64,7 +64,9 @@ jobs:
             }
           }
           EOF
-          bun run tauri signer sign latest.json
+          # Use `bun x`, not `bun run`: `bun run` resets the working directory
+          # to the package root, so the relative path would miss latest.json.
+          bun x tauri signer sign latest.json
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
