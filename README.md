@@ -13,4 +13,4 @@ I frequently switch between wireless earbuds, headphones and speakers as my outp
 
 ## Credits
 
-App icon by [ingmixa](https://www.flaticon.com/authors/ingmixa) on Flaticon.
+App icon by [upnow-graphic](https://www.flaticon.com/authors/upnow-graphic) on Flaticon.

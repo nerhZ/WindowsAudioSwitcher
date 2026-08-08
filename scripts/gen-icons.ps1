@@ -1,4 +1,4 @@
-# Regenerates the icon set from Flaticon source PNGs (ingmixa) in
+# Regenerates the icon set from Flaticon source PNGs (upnow-graphic) in
 # src-tauri/icons/source/ (16.png, 24.png, 32.png required; 64, 128, 256, 512
 # recommended). Every native size lands in the .ico as-is; only the sizes
 # Flaticon doesn't offer (20, 48) are derived.
@@ -17,7 +17,7 @@ $sourceDir = Join-Path $iconsDir "source"
 
 foreach ($size in 16, 24, 32) {
     if (-not (Test-Path (Join-Path $sourceDir "$size.png"))) {
-        Write-Error "Missing source icon: $sourceDir\$size.png - download the $size px PNG from https://www.flaticon.com/authors/ingmixa and re-run."
+        Write-Error "Missing source icon: $sourceDir\$size.png - download the $size px PNG from https://www.flaticon.com/authors/upnow-graphic and re-run."
     }
 }
 $masterLarge = if (Test-Path (Join-Path $sourceDir "512.png")) { "512.png" } else { "32.png" }
