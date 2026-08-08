@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::TrayIconBuilder,
     AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
 };
 
@@ -145,24 +145,13 @@ pub fn run() {
             let mut builder = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().cloned().unwrap())
                 .tooltip("AudioSwitch")
-                // Menu on right click only — a left click opens the dashboard.
-                .show_menu_on_left_click(false)
-                .on_menu_event(handle_menu_event)
-                .on_tray_icon_event(|tray, event| {
-                    // Never rebuild the menu from tray icon events: replacing
-                    // the HMENU while Windows is about to track the popup makes
-                    // it flash open and close. The menu is built at startup and
-                    // refreshed only from menu events (Refresh devices, device
-                    // switches) — moments when no popup is being displayed.
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        open_dashboard(tray.app_handle());
-                    }
-                });
+                .on_menu_event(handle_menu_event);
+            // No on_tray_icon_event handler: the native menu opens on both
+            // clicks (Windows default), and rebuilding the menu from tray
+            // events would replace the HMENU while Windows is tracking the
+            // popup, making it flash open and close. The menu is built at
+            // startup and refreshed only from menu events (Refresh devices,
+            // device switches) — moments when no popup is displayed.
 
             if let Ok(initial) = Menu::new(app) {
                 builder = builder.menu(&initial);
