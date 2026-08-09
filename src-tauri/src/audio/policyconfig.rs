@@ -1,4 +1,4 @@
-//! Manual COM binding for the undocumented `IPolicyConfig` interface — the
+//! Manual COM binding for the undocumented `IPolicyConfig` interface - the
 //! only known way to change the system-wide default audio endpoint from code.
 //!
 //! GUIDs and vtable layout are long-standing, community-verified facts
@@ -35,7 +35,7 @@ struct IPolicyConfigVtbl {
     ) -> HRESULT,
     add_ref: unsafe extern "system" fn(this: *mut c_void) -> u32,
     release: unsafe extern "system" fn(this: *mut c_void) -> u32,
-    // Opaque slots we never call — present only to keep the layout right.
+    // Opaque slots we never call - present only to keep the layout right.
     _get_mix_format: usize,        // 3
     _get_device_format: usize,     // 4
     _reset_device_format: usize,   // 5
@@ -79,7 +79,7 @@ impl PolicyConfig {
                 return Ok(PolicyConfig { raw, vtbl });
             }
         }
-        // E_NOINTERFACE — none of the known IID variants accepted.
+        // E_NOINTERFACE - none of the known IID variants accepted.
         Err(windows::core::Error::from_hresult(HRESULT(0x80004002u32 as i32)))
     }
 

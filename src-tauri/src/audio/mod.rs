@@ -4,6 +4,9 @@
 #[cfg(target_os = "windows")]
 mod policyconfig;
 
+#[cfg(target_os = "windows")]
+mod watcher;
+
 /// One playback endpoint on the host.
 #[derive(Debug, Clone)]
 pub struct AudioDevice {
@@ -23,12 +26,12 @@ impl AudioDevice {
 
 #[cfg(target_os = "windows")]
 pub fn list_devices() -> Result<Vec<AudioDevice>, String> {
-    windows_impl::list_devices()
+    watcher::list_devices()
 }
 
 #[cfg(target_os = "windows")]
 pub fn set_default(device_id: &str) -> Result<(), String> {
-    windows_impl::set_default(device_id)
+    watcher::set_default(device_id)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -38,6 +41,18 @@ pub fn list_devices() -> Result<Vec<AudioDevice>, String> {
 
 #[cfg(not(target_os = "windows"))]
 pub fn set_default(_device_id: &str) -> Result<(), String> {
+    Err("Windows Audio Switcher requires Windows".to_string())
+}
+
+/// Start the audio core (dedicated STA thread with a message pump hosting the
+/// notification client and all audio operations). See `watcher::init_audio_core`.
+#[cfg(target_os = "windows")]
+pub fn init_audio_core(on_change: impl Fn() + Send + 'static) -> Result<(), String> {
+    watcher::init_audio_core(on_change)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn init_audio_core(_on_change: impl Fn() + Send + 'static) -> Result<(), String> {
     Err("Windows Audio Switcher requires Windows".to_string())
 }
 
@@ -53,17 +68,17 @@ mod windows_impl {
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
-        COINIT_MULTITHREADED, STGM_READ,
+        COINIT_APARTMENTTHREADED, STGM_READ,
     };
 
     /// RAII guard for CoInitializeEx / CoUninitialize. Windows refcounts
-    /// per-thread, so nested creation is safe — but only the call that
+    /// per-thread, so nested creation is safe - but only the call that
     /// actually initialized the apartment may uninitialize it.
     ///
-    /// The main thread may already live in an apartment set up by Tauri or
-    /// WebView2, in which case an MTA init fails with RPC_E_CHANGED_MODE.
-    /// The existing apartment is still fully usable for Core Audio, so we
-    /// reuse it instead of failing.
+    /// Prefers an STA: the main thread must run a message pump for
+    /// IMMNotificationClient callbacks to be delivered, and mixing audio
+    /// operations across apartments crashes MMDevApi. If the thread already
+    /// lives in an apartment (any mode), it is reused instead of failing.
     pub(super) struct ComGuard {
         pub(super) owns_init: bool,
     }
@@ -73,7 +88,7 @@ mod windows_impl {
 
     impl ComGuard {
         pub(super) fn new() -> Result<Self, String> {
-            let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
             if hr.is_ok() {
                 // S_OK means this call initialized the apartment; S_FALSE
                 // means it was already initialized in this very mode.
@@ -96,14 +111,14 @@ mod windows_impl {
         }
     }
 
-    fn create_enumerator() -> Result<IMMDeviceEnumerator, String> {
+    pub(super) fn create_enumerator() -> Result<IMMDeviceEnumerator, String> {
         unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
             .map_err(|err| format!("CoCreateInstance(MMDeviceEnumerator): {err}"))
     }
 
     /// Owns a `PWSTR` that Windows allocated with `CoTaskMemAlloc`
     /// (`IMMDevice::GetId` hands back a raw pointer without transferring
-    /// ownership — freeing it is this guard's only job).
+    /// ownership - freeing it is this guard's only job).
     struct CoTaskString(PWSTR);
 
     impl CoTaskString {
@@ -204,7 +219,7 @@ mod windows_impl {
     }
 
     /// Switch all three role defaults to `device_id`, then re-read them and
-    /// confirm each settled — a split (partial failure, or a concurrent
+    /// confirm each settled - a split (partial failure, or a concurrent
     /// switch) is reported as an error, never a silent success.
     pub(super) fn set_default(device_id: &str) -> Result<(), String> {
         let _com = ComGuard::new()?;
@@ -239,6 +254,10 @@ mod tests {
     use super::*;
     use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
+    /// Tests that switch the system-wide default must not run concurrently -
+    /// they would trip each other's role verification.
+    static SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn enumerates_active_render_endpoints() {
         let devices = list_devices().expect("should enumerate endpoints");
@@ -261,6 +280,7 @@ mod tests {
     /// QueryInterface, vtable call, role verification) without changing state.
     #[test]
     fn policy_config_switch_is_idempotent() {
+        let _guard = SWITCH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let devices = list_devices().unwrap();
         let current = devices
             .iter()
@@ -282,10 +302,66 @@ mod tests {
         let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
         assert!(hr.is_ok(), "test setup: STA init failed");
 
-        let guard = ComGuard::new().expect("MTA attempt must fall back to the existing STA");
+        let guard = ComGuard::new().expect("apartment init must fall back to the existing apartment");
         assert!(!guard.owns_init, "guard must not uninitialize an apartment it did not create");
         drop(guard);
 
         unsafe { CoUninitialize() }
+    }
+
+    /// Regression: switching the default device while an IMMNotificationClient
+    /// is registered crashed MMDevApi when the two lived in different
+    /// apartments. All Core Audio work happens on the audio core thread now;
+    /// this test exercises registration + switching on that same STA thread
+    /// and asserts the change notification actually fires.
+    #[test]
+    fn notification_client_survives_switching() {
+        let _guard = SWITCH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let fired = Arc::new(AtomicBool::new(false));
+        let flag = fired.clone();
+        // init only errors when the core thread cannot be spawned; setup
+        // failures inside the thread degrade gracefully (and are logged).
+        super::init_audio_core(move || {
+            flag.store(true, Ordering::SeqCst);
+        })
+        .expect("audio core thread should spawn");
+
+        let devices = list_devices().expect("list works alongside watcher");
+        assert!(!devices.is_empty());
+        let current = devices
+            .iter()
+            .find(|d| d.is_default_multimedia)
+            .expect("a multimedia default exists");
+        let other = devices.iter().find(|d| d.id != current.id);
+        let switched = other.is_some();
+        let restore_result = if let Some(other) = other {
+            // catch_unwind around each switch so the restore always runs even
+            // if the first one panics - the user's default must not be left
+            // pointing at the test device.
+            let _ = std::panic::catch_unwind(|| {
+                set_default(&other.id).expect("switching default for the test");
+            });
+            std::panic::catch_unwind(|| {
+                set_default(&current.id).expect("restoring default");
+            })
+        } else {
+            Ok(())
+        };
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        // Single-device machines pass vacuously: without a second endpoint
+        // there is nothing to switch, so no notification can be expected.
+        if switched {
+            assert!(
+                restore_result.is_ok(),
+                "the default device must be restored even if the switch panicked"
+            );
+            assert!(
+                fired.load(Ordering::SeqCst),
+                "change notification should have fired"
+            );
+        }
     }
 }

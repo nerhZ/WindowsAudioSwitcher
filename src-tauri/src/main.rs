@@ -9,13 +9,13 @@
 #[cfg(target_os = "windows")]
 fn ensure_single_instance() {
     use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, BOOL};
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows::Win32::System::Threading::CreateMutexW;
 
     const NAME: &str = "Local\\com.audioswitch.app.single-instance";
     let wide: Vec<u16> = NAME.encode_utf16().chain(std::iter::once(0)).collect();
 
-    let handle = unsafe { CreateMutexW(None, BOOL(0), PCWSTR(wide.as_ptr())) };
+    let handle = unsafe { CreateMutexW(None, false, PCWSTR(wide.as_ptr())) };
     match handle {
         Ok(mutex) => {
             // GetLastError is meaningful even on success (already-exists case).
