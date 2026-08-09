@@ -13,7 +13,7 @@
         "https://github.com/nerhZ/WindowsAudioSwitcher/releases/latest/download/latest.json"
       ],
       "windows": {
-        "installMode": "passive"
+        "installMode": "quiet"
       }
     }
   },
