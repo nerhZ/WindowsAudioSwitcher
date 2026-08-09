@@ -42,18 +42,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd src-tauri/target/release/bundle/msi
+          cd src-tauri/target/release/bundle/nsis
           VERSION="${GITHUB_REF_NAME#v}"
           # GitHub sanitizes spaces in uploaded asset names (spaces -> dots),
           # so release assets must be space-free or every manifest URL 404s.
           # Rename the built artifacts before writing the manifest.
-          mv "Windows Audio Switcher_${VERSION}_x64_en-US.msi" "Windows-Audio-Switcher_${VERSION}_x64_en-US.msi"
-          mv "Windows Audio Switcher_${VERSION}_x64_en-US.msi.sig" "Windows-Audio-Switcher_${VERSION}_x64_en-US.msi.sig"
-          MSI="Windows-Audio-Switcher_${VERSION}_x64_en-US.msi"
-          SIG="Windows-Audio-Switcher_${VERSION}_x64_en-US.msi.sig"
+          mv "Windows Audio Switcher_${VERSION}_x64-setup.exe" "Windows-Audio-Switcher_${VERSION}_x64-setup.exe"
+          mv "Windows Audio Switcher_${VERSION}_x64-setup.exe.sig" "Windows-Audio-Switcher_${VERSION}_x64-setup.exe.sig"
+          INSTALLER="Windows-Audio-Switcher_${VERSION}_x64-setup.exe"
+          SIG="Windows-Audio-Switcher_${VERSION}_x64-setup.exe.sig"
           SIG_CONTENT=$(cat "$SIG")
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${MSI}"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${INSTALLER}"
           cat > latest.json <<EOF
           {
             "version": "${VERSION}",
@@ -81,11 +81,9 @@ jobs:
           # pre-releases; /releases/latest/ then keeps pointing at the latest
           # stable release, so pre-release manifests never reach stable
           # installs through the update endpoint.
-          # NOTE: MSI ProductVersion must be numeric, so pre-release tags need
-          # numeric ids (v1.1.0-1) - v1.1.0-beta.1 fails the bundler.
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/msi/*.msi.sig
-            src-tauri/target/release/bundle/msi/latest.json
-            src-tauri/target/release/bundle/msi/latest.json.sig
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
+            src-tauri/target/release/bundle/nsis/latest.json
+            src-tauri/target/release/bundle/nsis/latest.json.sig
