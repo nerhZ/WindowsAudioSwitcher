@@ -8,7 +8,7 @@ Left or right click the tray icon, pick a device, done. Installed copies auto-up
 from GitHub Releases.
 
 ## Tech-stack
-Tauri. Was originally built to be a SvelteKit/Tauri project - but the WebView is unnecessary bloat. Was stripped to just be a taskbar tray icon + context menu. All that's needed and uses much less RAM (and storage). App is ~16 MB downloaded, and only requires ~4 MB of memory.
+Tauri. Was originally built to be a SvelteKit/Tauri project - but the WebView is unnecessary bloat. Was stripped to just be a taskbar tray icon + context menu. All that's needed and uses much less RAM (and storage). App is ~11.8 MB downloaded, and only requires ~1.9 MB of memory.
 
 ## Why was it built?
 
