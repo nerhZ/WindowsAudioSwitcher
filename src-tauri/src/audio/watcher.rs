@@ -10,7 +10,7 @@
 use std::sync::mpsc::{sync_channel, Receiver, Sender, SyncSender};
 use std::sync::OnceLock;
 
-use windows::core::{implement, PCWSTR, Result as CoreResult, IUnknownImpl};
+use windows::core::{implement, PCWSTR, Result as CoreResult};
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::{
     DEVICE_STATE, EDataFlow, ERole, IMMNotificationClient, IMMNotificationClient_Impl,
@@ -38,34 +38,36 @@ struct NotificationClient {
     events: Sender<()>,
 }
 
+impl NotificationClient_Impl {
+    fn notify(&self) -> CoreResult<()> {
+        let _ = self.events.send(());
+        Ok(())
+    }
+}
+
 impl IMMNotificationClient_Impl for NotificationClient_Impl {
     fn OnDeviceStateChanged(
         &self,
         _id: &PCWSTR,
         _state: DEVICE_STATE,
     ) -> CoreResult<()> {
-        let _ = self.get_impl().events.send(());
-        Ok(())
+        self.notify()
     }
 
     fn OnDeviceAdded(&self, _id: &PCWSTR) -> CoreResult<()> {
-        let _ = self.get_impl().events.send(());
-        Ok(())
+        self.notify()
     }
 
     fn OnDeviceRemoved(&self, _id: &PCWSTR) -> CoreResult<()> {
-        let _ = self.get_impl().events.send(());
-        Ok(())
+        self.notify()
     }
 
     fn OnDefaultDeviceChanged(&self, _flow: EDataFlow, _role: ERole, _id: &PCWSTR) -> CoreResult<()> {
-        let _ = self.get_impl().events.send(());
-        Ok(())
+        self.notify()
     }
 
     fn OnPropertyValueChanged(&self, _id: &PCWSTR, _key: &PROPERTYKEY) -> CoreResult<()> {
-        let _ = self.get_impl().events.send(());
-        Ok(())
+        self.notify()
     }
 }
 
@@ -175,36 +177,33 @@ fn execute(job: AudioJob) {
     }
 }
 
-/// Route a device listing through the audio core thread. Falls back to running
-/// inline when the core has not been started (e.g. tests).
-pub fn list_devices() -> Result<Vec<super::AudioDevice>, String> {
-    if let Some(executor) = EXECUTOR.get() {
-        let (tx, rx) = sync_channel(1);
-        executor
-            .jobs
-            .send(AudioJob::ListDevices(tx))
-            .map_err(|err| format!("audio core unavailable: {err}"))?;
-        rx.recv_timeout(std::time::Duration::from_secs(5))
-            .map_err(|err| format!("audio core unresponsive: {err}"))?
-    } else {
-        super::windows_impl::list_devices()
-    }
+/// Route a job through the audio core thread. Falls back to running inline
+/// when the core has not been started (e.g. tests).
+fn via_core<T>(
+    make_job: impl FnOnce(SyncSender<Result<T, String>>) -> AudioJob,
+    fallback: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let Some(executor) = EXECUTOR.get() else {
+        return fallback();
+    };
+    let (tx, rx) = sync_channel(1);
+    executor
+        .jobs
+        .send(make_job(tx))
+        .map_err(|err| format!("audio core unavailable: {err}"))?;
+    rx.recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|err| format!("audio core unresponsive: {err}"))?
 }
 
-/// Route a device switch through the audio core thread. Falls back to running
-/// inline when the core has not been started (e.g. tests).
+pub fn list_devices() -> Result<Vec<super::AudioDevice>, String> {
+    via_core(AudioJob::ListDevices, super::windows_impl::list_devices)
+}
+
 pub fn set_default(device_id: &str) -> Result<(), String> {
-    if let Some(executor) = EXECUTOR.get() {
-        let (tx, rx) = sync_channel(1);
-        executor
-            .jobs
-            .send(AudioJob::SetDefault(device_id.to_string(), tx))
-            .map_err(|err| format!("audio core unavailable: {err}"))?;
-        rx.recv_timeout(std::time::Duration::from_secs(5))
-            .map_err(|err| format!("audio core unresponsive: {err}"))?
-    } else {
-        super::windows_impl::set_default(device_id)
-    }
+    via_core(
+        |tx| AudioJob::SetDefault(device_id.to_string(), tx),
+        || super::windows_impl::set_default(device_id),
+    )
 }
 
 /// Coalescing window for device-change bursts (Windows fires several events

@@ -162,6 +162,13 @@ mod windows_impl {
         Ok(value.to_string())
     }
 
+    fn is_id(current: &Option<String>, id: &str) -> bool {
+        current
+            .as_deref()
+            .map(|default| default.eq_ignore_ascii_case(id))
+            .unwrap_or(false)
+    }
+
     #[derive(Default)]
     struct RoleDefaults {
         console: Option<String>,
@@ -201,16 +208,10 @@ mod windows_impl {
                 .map_err(|err| format!("IMMDeviceCollection::Item({index}): {err}"))?;
             let id = device_id(&device)?;
             let name = friendly_name(&device).unwrap_or_else(|_| "(unnamed device)".to_string());
-            let is_role_default = |current: &Option<String>| {
-                current
-                    .as_deref()
-                    .map(|default| default.eq_ignore_ascii_case(&id))
-                    .unwrap_or(false)
-            };
             devices.push(super::AudioDevice {
-                is_default_console: is_role_default(&defaults.console),
-                is_default_multimedia: is_role_default(&defaults.multimedia),
-                is_default_communications: is_role_default(&defaults.communications),
+                is_default_console: is_id(&defaults.console, &id),
+                is_default_multimedia: is_id(&defaults.multimedia, &id),
+                is_default_communications: is_id(&defaults.communications, &id),
                 id,
                 name,
             });
@@ -231,15 +232,9 @@ mod windows_impl {
     fn verify_all_roles(device_id: &str) -> Result<(), String> {
         let enumerator = create_enumerator()?;
         let actual = current_defaults(&enumerator);
-        let settled = |current: &Option<String>| {
-            current
-                .as_deref()
-                .map(|id| id.eq_ignore_ascii_case(device_id))
-                .unwrap_or(false)
-        };
-        if settled(&actual.console)
-            && settled(&actual.multimedia)
-            && settled(&actual.communications)
+        if is_id(&actual.console, device_id)
+            && is_id(&actual.multimedia, device_id)
+            && is_id(&actual.communications, device_id)
         {
             Ok(())
         } else {

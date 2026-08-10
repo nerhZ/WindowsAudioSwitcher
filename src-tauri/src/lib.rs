@@ -90,13 +90,18 @@ fn rebuild_tray_menu<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Whether our own Win32 popup menu (e.g. the open tray menu) is currently
-/// showing. Popup menus are top-level windows of class "#32768"; we only match
-/// windows owned by this process, so other applications' open menus are
-/// ignored. (The foreground-window check cannot be used: tray-icon foregrounds
-/// its hidden window, not the menu.)
+/// Whether one of our own Win32 popup menus (class "#32768", our process) is
+/// showing. Used to defer tray-menu rebuilds while a popup is open - calling
+/// `set_menu` mid-popup dismisses it.
 #[cfg(target_os = "windows")]
 fn own_popup_menu_open() -> bool {
+    own_popup_menu_hwnd().is_some()
+}
+
+/// Handle of our own popup menu window, if one is showing. See
+/// [`own_popup_menu_open`].
+#[cfg(target_os = "windows")]
+fn own_popup_menu_hwnd() -> Option<windows::Win32::Foundation::HWND> {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -104,7 +109,7 @@ fn own_popup_menu_open() -> bool {
     };
 
     struct Ctx {
-        found: bool,
+        found: Option<HWND>,
     }
 
     unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -115,14 +120,14 @@ fn own_popup_menu_open() -> bool {
             let mut pid = 0u32;
             GetWindowThreadProcessId(hwnd, Some(&mut pid));
             if pid == std::process::id() {
-                ctx.found = true;
+                ctx.found = Some(hwnd);
                 return BOOL(0); // stop enumerating
             }
         }
         BOOL(1) // continue
     }
 
-    let mut ctx = Ctx { found: false };
+    let mut ctx = Ctx { found: None };
     unsafe {
         let _ = EnumWindows(Some(callback), LPARAM(&mut ctx as *mut Ctx as isize));
     };
@@ -134,12 +139,146 @@ fn own_popup_menu_open() -> bool {
     false
 }
 
-/// Rebuild the tray menu, deferring while a popup menu is open: calling
-/// `set_menu` mid-popup dismisses it (the flash bug). When a popup is open the
-/// wait happens on a background thread - the main thread must stay free so
-/// menu clicks keep working - and the rebuild is dispatched back once the
-/// popup closes (50ms intervals, 10s cap). The open menu may show stale
-/// devices until it is dismissed.
+/// Keep our tray popup menu inside the work area (screen minus taskbar).
+///
+/// The menu opens at the cursor, which sits inside the taskbar, so its bottom
+/// strip overlaps it; behind a fullscreen app the taskbar covers that strip,
+/// and z-order tricks (topmost on the menu or its owner) can't fix it. Moving
+/// the menu into the work area the moment it opens makes the overlap
+/// impossible.
+///
+/// Events, not clicks: tray-icon opens the menu with a blocking
+/// TrackPopupMenu before any click event is delivered, so a WinEvent hook on
+/// EVENT_SYSTEM_MENUPOPUPSTART is the only way to catch the menu while it is
+/// still open. Only our own process's menus are touched.
+#[cfg(target_os = "windows")]
+fn spawn_menu_work_area_clamp() {
+    std::thread::spawn(|| {
+        use windows::Win32::Foundation::{HWND, RECT};
+        use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, GetMessageW, GetWindowRect, GetWindowThreadProcessId, SetWindowPos,
+            SystemParametersInfoW, TranslateMessage, EVENT_SYSTEM_MENUPOPUPSTART, MSG,
+            SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WINEVENT_OUTOFCONTEXT,
+        };
+
+        /// Move a window so it fits entirely inside the work area (the screen
+        /// minus the taskbar). The tray menu opens at the cursor - inside the
+        /// taskbar - so it needs lifting by exactly the overlap amount.
+        unsafe fn clamp_to_work_area(hwnd: HWND) {
+            let mut menu_rect = RECT::default();
+            if GetWindowRect(hwnd, &mut menu_rect).is_err() {
+                return;
+            }
+            let width = menu_rect.right - menu_rect.left;
+            let height = menu_rect.bottom - menu_rect.top;
+            if width <= 0 || height <= 0 {
+                return;
+            }
+            let mut work = RECT::default();
+            if SystemParametersInfoW(
+                SPI_GETWORKAREA,
+                0,
+                Some(&mut work as *mut RECT as *mut core::ffi::c_void),
+                Default::default(),
+            )
+            .is_err()
+            {
+                return;
+            }
+            let mut x = menu_rect.left;
+            let mut y = menu_rect.top;
+            if x + width > work.right {
+                x = work.right - width;
+            }
+            if y + height > work.bottom {
+                y = work.bottom - height;
+            }
+            if x < work.left {
+                x = work.left;
+            }
+            if y < work.top {
+                y = work.top;
+            }
+            if x != menu_rect.left || y != menu_rect.top {
+                match SetWindowPos(
+                    hwnd,
+                    None,
+                    x,
+                    y,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE,
+                ) {
+                    Ok(_) => log_line(&format!(
+                        "devices: menu moved from ({},{}) to ({x},{y}) size {width}x{height}",
+                        menu_rect.left, menu_rect.top
+                    )),
+                    Err(err) => log_line(&format!("devices: menu move failed: {err}")),
+                }
+            }
+        }
+
+        unsafe extern "system" fn hook_proc(
+            _hook: HWINEVENTHOOK,
+            event: u32,
+            hwnd: HWND,
+            _id_object: i32,
+            _id_child: i32,
+            _event_thread: u32,
+            _event_time: u32,
+        ) {
+            if event != EVENT_SYSTEM_MENUPOPUPSTART {
+                return;
+            }
+            let mut pid = 0u32;
+            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+            if pid != std::process::id() {
+                return;
+            }
+            log_line(&format!("devices: menu popup start hwnd={hwnd:?}"));
+            unsafe { clamp_to_work_area(hwnd) };
+            // The rect may not be final at EVENT_SYSTEM_MENUPOPUPSTART (still
+            // zero-size or mid-layout); one delayed pass catches that. HWND
+            // is not Send, so the handle travels as a raw usize.
+            let hwnd = hwnd.0 as usize;
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(15));
+                unsafe { clamp_to_work_area(HWND(hwnd as *mut core::ffi::c_void)) };
+            });
+        }
+
+        unsafe {
+            let hook = SetWinEventHook(
+                EVENT_SYSTEM_MENUPOPUPSTART,
+                EVENT_SYSTEM_MENUPOPUPSTART,
+                None,
+                Some(hook_proc),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            );
+            if hook.is_invalid() {
+                log_line("devices: work-area hook failed - menu may overlap the taskbar");
+                return;
+            }
+            let mut msg = MSG::default();
+            // GetMessageW returns -1 on error; only nonzero-positive means a
+            // message was retrieved (0 = WM_QUIT).
+            while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+                let _ = TranslateMessage(&msg);
+                let _ = DispatchMessageW(&msg);
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn spawn_menu_work_area_clamp() {}
+
+/// Rebuild the tray menu, deferring while a popup menu is open: replacing the
+/// HMENU mid-popup dismisses it (the flash bug). Waits on a background thread
+/// so menu clicks keep working, then rebuilds on the main thread.
 fn rebuild_tray_menu_when_closed(app: AppHandle) {
     if !own_popup_menu_open() {
         rebuild_tray_menu(&app);
@@ -201,15 +340,22 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     }
 }
 
+/// App data directory: `%LOCALAPPDATA%\com.audioswitch.app`, where the log and
+/// the settings file live. `None` when the environment has no LOCALAPPDATA.
+fn app_data_dir() -> Option<std::path::PathBuf> {
+    Some(
+        std::path::Path::new(&std::env::var("LOCALAPPDATA").ok()?).join("com.audioswitch.app"),
+    )
+}
+
 /// Append a timestamped line to the update log in the app data directory.
 /// Release builds have no console, so this is the only way to see what the
 /// updater, autostart and device watcher are doing. The log rotates when it
 /// exceeds [`LOG_MAX_BYTES`].
 pub(crate) fn log_line(message: &str) {
-    let Ok(dir) = std::env::var("LOCALAPPDATA") else {
+    let Some(dir) = app_data_dir() else {
         return;
     };
-    let dir = std::path::Path::new(&dir).join("com.audioswitch.app");
     let _ = std::fs::create_dir_all(&dir);
     let file = dir.join("app.log");
     // Rotate before appending: the previous log becomes app.log.old. Ignore
@@ -234,8 +380,7 @@ const LOG_MAX_BYTES: u64 = 256 * 1024;
 /// Returns `None` when the app data directory is unavailable, mirroring
 /// `log_line`'s early return.
 fn settings_path() -> Option<std::path::PathBuf> {
-    let dir = std::env::var("LOCALAPPDATA").ok()?;
-    Some(std::path::Path::new(&dir).join("com.audioswitch.app").join("settings.txt"))
+    Some(app_data_dir()?.join("settings.txt"))
 }
 
 /// Whether to check for updates on startup. Defaults to enabled; a missing or
@@ -342,12 +487,13 @@ pub fn run() {
                 .tooltip("Windows Audio Switcher")
                 .on_menu_event(handle_menu_event);
             // No on_tray_icon_event handler: the native menu opens on both
-            // clicks (Windows default), and rebuilding the menu from tray
-            // events would replace the HMENU while Windows is tracking the
-            // popup, making it flash open and close. The menu is built at
-            // startup and refreshed only from menu events (Refresh devices,
-            // device switches) - moments when no popup is displayed.
-
+            // clicks, and rebuilding it from tray events would replace the
+            // HMENU mid-popup, making it flash. It is rebuilt only from menu
+            // events (Refresh, device switches) - moments when no popup is
+            // open. Keeping the popup in the work area is handled by
+            // `spawn_menu_work_area_clamp`, not click events (which are
+            // delivered only after the popup closes).
+            spawn_menu_work_area_clamp();
             if let Ok(initial) = Menu::new(app) {
                 builder = builder.menu(&initial);
             }
