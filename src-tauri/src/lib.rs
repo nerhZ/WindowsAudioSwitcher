@@ -298,6 +298,77 @@ fn rebuild_tray_menu_when_closed(app: AppHandle) {
     });
 }
 
+/// Move our autostart Run entry to the front of the key.
+///
+/// Winlogon launches Run values in the order they appear in the registry,
+/// which is insertion order - so a value deleted and re-created by every
+/// enable/disable cycle always ends up last. Reordering to the front once per
+/// launch (values update in place afterwards) keeps the tray appearing early
+/// in the logon sequence. No-op when autostart is disabled or already first.
+#[cfg(target_os = "windows")]
+fn reorder_autostart_to_front(app_name: &str) {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+    use winreg::transaction::Transaction;
+    use winreg::{RegKey, RegValue};
+
+    const RUN_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    // No API can insert a value at the front of a key (the value list is
+    // append-only), so reordering means rewriting the key. The rewrite runs
+    // inside a TxR transaction: a crash or power loss mid-write rolls the
+    // key back instead of leaving startup entries half-deleted.
+    let Ok(t) = Transaction::new() else {
+        log_line("autostart: reorder skipped - TxR transaction unavailable");
+        return;
+    };
+    let Ok(run) = hkcu.open_subkey_transacted_with_flags(RUN_KEY, &t, KEY_READ | KEY_WRITE) else {
+        log_line("autostart: reorder skipped - cannot open Run key");
+        return;
+    };
+    // enum_values yields values in registry order (= the launch order).
+    let Ok(mut items) = run.enum_values().collect::<Result<Vec<(String, RegValue)>, _>>() else {
+        log_line("autostart: reorder skipped - cannot enumerate Run values");
+        return;
+    };
+    let Some(own_index) = items.iter().position(|(n, _)| n.eq_ignore_ascii_case(app_name)) else {
+        return; // autostart not enabled - leave the key alone
+    };
+    if own_index == 0 {
+        return; // already first
+    }
+    let own = items.remove(own_index);
+    // Rewrite in one burst: our value first, then everything else in its
+    // original order, with original types and raw bytes preserved. Any
+    // failure aborts the whole rewrite - never commit a partial Run key.
+    // Names are already UTF-16-safe here: winreg's enum_values uses strict
+    // from_utf16, so a lone-surrogate name aborts the enumeration above with
+    // ERROR_INVALID_DATA before any write happens - reorder is just skipped.
+    let rewrite = (|| -> Result<(), ()> {
+        for (name, _) in &items {
+            run.delete_value(name).map_err(|_| ())?;
+        }
+        run.set_raw_value(&own.0, &own.1).map_err(|_| ())?;
+        for (name, value) in &items {
+            run.set_raw_value(name, value).map_err(|_| ())?;
+        }
+        Ok(())
+    })();
+    if rewrite.is_err() {
+        let _ = t.rollback();
+        log_line("autostart: reorder aborted - Run key rewrite failed, rolled back");
+        return;
+    }
+    if t.commit().is_err() {
+        log_line("autostart: Run reorder transaction failed - rolled back");
+        return;
+    }
+    log_line("autostart: Run entry moved to front for earlier launch");
+}
+
+#[cfg(not(target_os = "windows"))]
+fn reorder_autostart_to_front(_app_name: &str) {}
+
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let id = event.id().as_ref();
     if let Some(device_id) = id.strip_prefix(DEVICE_PREFIX) {
@@ -326,7 +397,16 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
                 autolaunch.enable()
             };
             match result {
-                Ok(_) => log_line(&format!("autostart: {}", if enabled { "disabled" } else { "enabled" })),
+                Ok(_) => {
+                    log_line(&format!("autostart: {}", if enabled { "disabled" } else { "enabled" }));
+                    // enable() appends the Run value to the end of the key, so
+                    // move it to the front right away - otherwise the very
+                    // next boot would still start last (the startup self-heal
+                    // only fixes the boot after that).
+                    if !enabled {
+                        reorder_autostart_to_front(app.package_info().name.as_str());
+                    }
+                }
                 Err(err) => log_line(&format!(
                     "autostart: {} failed: {err}",
                     if enabled { "disable" } else { "enable" }
@@ -465,6 +545,12 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             app.manage(AudioState(Mutex::new(())));
+
+            // Winlogon launches Run entries in insertion order; every
+            // enable/disable cycle re-appends ours, so it would start last.
+            // Nudge it to the front once per launch (no-op unless enabled
+            // and not already first).
+            reorder_autostart_to_front(app.package_info().name.as_str());
 
             // A failure here degrades gracefully: audio ops run inline and the
             // app still works, just without auto-refresh.

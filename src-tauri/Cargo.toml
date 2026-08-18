@@ -29,6 +29,11 @@ tauri-plugin-updater = "2"
 serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
+# Same version auto-launch uses; used to reorder our Run entry to the front
+# (Winlogon launches Run values in insertion order, so a re-enabled entry
+# would otherwise always start last). `transactions` makes the reorder
+# atomic against power loss.
+winreg = { version = "0.10", features = ["transactions"] }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_System_Com",
